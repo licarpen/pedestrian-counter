@@ -26,12 +26,14 @@ import time
 import socket
 import json
 import cv2
+import numpy as np
 
 import logging as log
 import paho.mqtt.client as mqtt
 
 from argparse import ArgumentParser
 from inference import Network
+from collections import deque
 
 # MQTT server environment variables
 HOSTNAME = socket.gethostname()
@@ -74,18 +76,6 @@ def connect_mqtt():
 
     return client
 
-def parse_results(frame, result, threshold, frame_width, frame_height):
-    count = 0;
-    for person in result[0][0]:
-        if person[2] > threshold:
-            x1 = int(person[3] * frame_width)
-            y1 = int(person[4] * frame_height)
-            x2 = int(person[5] * frame_width)
-            y2 = int(person[6] * frame_height)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (150, 0, 150), 1)
-            count = count + 1
-    return frame, count
-
 def infer_on_stream(args, client):
     """
     Initialize the inference network, stream video to network,
@@ -120,6 +110,9 @@ def infer_on_stream(args, client):
     count_total = 0
     count_previous = 0
     time_start = 0
+    counter = 0
+    tracking_queue = deque(maxlen=30)
+    tracking_threshold = 0.2
 
     ### TODO: Loop until stream is over ###
     while cap.isOpened():
@@ -133,17 +126,31 @@ def infer_on_stream(args, client):
         frame_copy = frame_copy.transpose((2, 0, 1))
         frame_copy = frame_copy.reshape((num, channels, height, width))
         
+        # initialize variables
         time_inference_start = time.time()
         
         infer_network.exec_net(frame_id, frame_copy)
         
         if infer_network.wait(frame_id) == 0:
+        
             time_detected = time.time() - time_inference_start
             result = infer_network.get_output(frame_id)
+            count = 0
             
-            frame, count = parse_results(frame, result, prob_threshold, frame_width, frame_height)
-            time_text = "Inference time: {:.3f}ms".format(time_detected * 1000)
-            cv2.putText(frame, time_text, (30, 30), cv2.FONT_HERSHEY_DUPLEX, 0.5, (200, 10, 10), 2)
+            for person in result[0][0]:
+                if person[2] > args.prob_threshold:
+                    x1 = int(person[3] * frame_width)
+                    y1 = int(person[4] * frame_height)
+                    x2 = int(person[5] * frame_width)
+                    y2 = int(person[6] * frame_height)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (150, 0, 150), 1)
+                    count = count + 1
+            
+            tracking_queue.append(count)
+            count = 0
+            
+            if np.sum(tracking_queue) / 30 > tracking_threshold:
+                count = 1
             
             if count > count_previous:
                 time_start = time.time()
@@ -156,6 +163,9 @@ def infer_on_stream(args, client):
     
             client.publish("person", json.dumps({ "count": count }))
             count_previous = count
+            
+            time_text = "Inference time: {:.3f}ms".format(time_detected * 1000)
+            cv2.putText(frame, time_text, (30, 30), cv2.FONT_HERSHEY_DUPLEX, 0.5, (200, 10, 10), 2)
         
             if key_pressed == 27:
                 break
