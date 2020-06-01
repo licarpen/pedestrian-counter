@@ -100,9 +100,24 @@ def infer_on_stream(args, client):
 
     ### TODO: Handle the input stream ###
     # get and open video capture
-    cap = cv2.VideoCapture(args.input)
+    single_image = False
+    
+    if args.input == 'CAM':
+        input = 0
+    elif args.input[-3:] in ["jpg", "bmp"]:
+        input = args.input
+        single_image = True
+    else:
+        input = args.input
+        assert os.path.isFile(input)
+    
+    cap = cv2.VideoCapture(input)
     print('videocapture')
-    cap.open(args.input)
+    cap.open(input)
+    
+    if not cap.isOpened():
+        log.error('Error opening input: ', input)
+    
     frame_width = int(cap.get(3))
     frame_height = int(cap.get(4))
     
@@ -172,6 +187,9 @@ def infer_on_stream(args, client):
             
         sys.stdout.buffer.write(frame)
         sys.stdout.flush()
+        
+        if single_image:
+            cv2.imwrite("output.jpg", frame)
     
     cap.release()
     cv2.destroyAllWindows
